@@ -80,6 +80,8 @@ def get_database_connection():
             user="avnadmin",
             password="AVNS_4kyAq-NIrwVT_AMv3H5",
             autocommit=True,
+            port = 19956,
+            ssl_ca = "ca.pem"
             connect_timeout=2,  # Reduced from 5 to 2 seconds
             raise_on_warnings=False
         )
