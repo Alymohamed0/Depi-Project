@@ -36,3 +36,6 @@ streamlit-lottie>=0.0.5
 # accelerate>=0.20.0
 # For NLTK data (if using TextBlob advanced features):
 # nltk>=3.8.0
+#data base
+streamlit
+mysql-connector-python
