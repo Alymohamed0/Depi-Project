@@ -26,6 +26,13 @@ Pillow>=9.0.0
 
 # Database
 mysql-connector-python>=8.0.33
+# Alternative MySQL connector (pure Python, no C extensions):
+# PyMySQL>=1.1.0
+# Note: The app uses MySQL by default. Make sure MySQL Server is installed and running.
+# For Windows: Download MySQL Installer from https://dev.mysql.com/downloads/installer/
+# For Linux: sudo apt-get install mysql-server (Ubuntu/Debian) or sudo yum install mysql-server (CentOS/RHEL)
+# For macOS: brew install mysql
+# SQLite is built into Python (no installation needed) but not used in this app
 
 # Utilities
 requests>=2.31.0
@@ -36,6 +43,3 @@ streamlit-lottie>=0.0.5
 # accelerate>=0.20.0
 # For NLTK data (if using TextBlob advanced features):
 # nltk>=3.8.0
-#data base
-streamlit
-mysql-connector-python
