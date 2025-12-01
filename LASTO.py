@@ -5468,7 +5468,8 @@ elif page == "AI Fitness Trainer":
                 cap.set(cv2.CAP_PROP_FPS, 30)
 
                 if not cap.isOpened():
-                    st.error("❌ Could not open camera. Make sure it is connected and not used by another app.")
+                    st.error("❌ Could not open camera. Note: Live camera access is not supported on Streamlit Cloud. "
+    "To use a real-time camera, run this app locally on your computer.")
                 else:
                     # Process a short burst of frames, then rerun for continuous effect
                     max_frames = 60
