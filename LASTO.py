@@ -12,6 +12,7 @@ import time
 import requests
 import joblib
 import os
+import json
 import re
 import tempfile
 import warnings
@@ -76,12 +77,10 @@ def get_database_connection():
     try:
         # Use shorter timeout to prevent blocking
         conn = mysql.connector.connect(
-            host="mysql-1eae3245-alymohamedahmed1234-dc68.g.aivencloud.com",
-            user="avnadmin",
-            password="AVNS_4kyAq-NIrwVT_AMv3H5",
+            host="localhost",
+            user="root",
+            password="Mhaoamhaoa7@",
             autocommit=True,
-            port = 19956,
-            ssl_ca = "ca.pem",
             connect_timeout=2,  # Reduced from 5 to 2 seconds
             raise_on_warnings=False
         )
@@ -1311,6 +1310,63 @@ if not isinstance(st.session_state.get('weight_history', []), list):
 if not isinstance(st.session_state.get('health_journal', []), list):
     st.session_state.health_journal = []
 
+# Lightweight per-user persistence (JSON file)
+DATA_STORE_PATH = "user_data_store.json"
+
+def load_user_store():
+    if not os.path.exists(DATA_STORE_PATH):
+        return {}
+    try:
+        with open(DATA_STORE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_user_store(store: dict):
+    try:
+        with open(DATA_STORE_PATH, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass  # Fail quietly; avoids blocking UI
+
+def get_current_username():
+    return st.session_state.login_state.get('username')
+
+def sync_user_state_from_store():
+    """Load persisted user data into session after login."""
+    username = get_current_username()
+    if not username or st.session_state.login_state.get('is_guest'):
+        return
+    store = load_user_store()
+    user_bucket = store.get(username, {})
+    for key, default in [
+        ('meal_log', []),
+        ('health_journal', []),
+        ('mood_history', []),
+        ('sleep_data', []),
+        ('weight_history', []),
+        ('health_metrics', st.session_state.health_metrics),
+    ]:
+        if key in user_bucket:
+            st.session_state[key] = user_bucket.get(key, default)
+
+def persist_user_state():
+    """Save session data for current user."""
+    username = get_current_username()
+    if not username or st.session_state.login_state.get('is_guest'):
+        return
+    store = load_user_store()
+    store[username] = store.get(username, {})
+    store[username].update({
+        'meal_log': st.session_state.get('meal_log', []),
+        'health_journal': st.session_state.get('health_journal', []),
+        'mood_history': st.session_state.get('mood_history', []),
+        'sleep_data': st.session_state.get('sleep_data', []),
+        'weight_history': st.session_state.get('weight_history', []),
+        'health_metrics': st.session_state.get('health_metrics', {}),
+    })
+    save_user_store(store)
+
 # Utility functions
 def calculate_bmi(weight, height):
     """Calculate BMI from weight and height"""
@@ -1688,15 +1744,13 @@ def generate_chatbot_response(user_input, user_data):
     Falls back to the next model if one fails.
     """
 
-    # --- API Key Configuration ---
-    # --- API Key Configuration ---
+        # --- API Key Configuration ---
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
     except KeyError:
         return "❌ API Key missing. Please add GEMINI_API_KEY in Streamlit Secrets."
 
     genai.configure(api_key=api_key)
-
 
     # --- Build Profile Summary ---
     age = user_data.get('age')
@@ -1855,7 +1909,7 @@ def generate_chatbot_response(user_input, user_data):
         "gemini-2.5-flash-lite", 
         "gemini-2.0-flash",
         "gemini-1.5-flash",
-        "gemini-1.5-pro"
+        "gemini-1.5-pro",
     ]
     
     last_error = None
@@ -2073,6 +2127,9 @@ def login_user(username, password):
                 'stress_level': profile.get('stress_level', 'Moderate'),
                 'logged_in': True
             })
+        
+        # Pull any saved personal data (meals, journal, mood) for this user
+        sync_user_state_from_store()
         
         return True, "Welcome back, " + str(user) + "!"
     return False, "Invalid username or password"
@@ -3135,36 +3192,60 @@ elif page == "Meal Logger":
         st.subheader("📝 Log Your Meals")
         
         with st.form("meal_form"):
+            quick_meals = {
+                "Custom": None,
+                "Oatmeal + Berries": {"name": "Oatmeal with berries", "calories": 320, "protein": 12, "carbs": 52, "fats": 8},
+                "Chicken Salad": {"name": "Grilled chicken salad", "calories": 420, "protein": 35, "carbs": 18, "fats": 22},
+                "Greek Yogurt": {"name": "Greek yogurt & nuts", "calories": 280, "protein": 20, "carbs": 18, "fats": 12},
+                "Protein Shake": {"name": "Protein shake (whey + banana)", "calories": 350, "protein": 32, "carbs": 38, "fats": 7},
+            }
+
+            quick_pick = st.selectbox("Quick add", list(quick_meals.keys()))
+            preset = quick_meals.get(quick_pick)
+
             col1, col2 = st.columns(2)
             
             with col1:
                 meal_type = st.selectbox("Meal Type", ["Breakfast", "Lunch", "Dinner", "Snack"])
-                meal_name = st.text_input("Meal Name", placeholder="e.g., Grilled Chicken Salad")
+                meal_name = st.text_input(
+                    "Meal Name",
+                    value=preset["name"] if preset else "",
+                    placeholder="e.g., Grilled Chicken Salad",
+                    key="meal_name_input",
+                )
                 meal_time = st.time_input("Time", value=datetime.now().time())
+                portion = st.select_slider("Portion size", options=["0.5x", "1x", "1.5x", "2x"], value="1x")
             
             with col2:
-                calories = st.number_input("Calories (kcal)", min_value=0, value=0)
-                protein = st.number_input("Protein (g)", min_value=0.0, value=0.0, step=0.1)
-                carbs = st.number_input("Carbs (g)", min_value=0.0, value=0.0, step=0.1)
-                fats = st.number_input("Fats (g)", min_value=0.0, value=0.0, step=0.1)
+                calories = st.number_input("Calories (kcal)", min_value=0, value=preset["calories"] if preset else 0)
+                protein = st.number_input("Protein (g)", min_value=0.0, value=preset["protein"] if preset else 0.0, step=0.1)
+                carbs = st.number_input("Carbs (g)", min_value=0.0, value=preset["carbs"] if preset else 0.0, step=0.1)
+                fats = st.number_input("Fats (g)", min_value=0.0, value=preset["fats"] if preset else 0.0, step=0.1)
+                satisfaction = st.select_slider("How satisfying?", options=["Low", "Okay", "Good", "Great"], value="Good")
             
             notes = st.text_area("Notes (optional)", placeholder="How did you feel after eating?")
+            tags = st.multiselect("Tags", ["High Protein", "Low Carb", "Post-Workout", "Pre-Workout", "Plant-based", "Quick Snack"])
             
             if st.form_submit_button("🍽️ Log Meal", use_container_width=True):
+                multiplier = {"0.5x": 0.5, "1x": 1.0, "1.5x": 1.5, "2x": 2.0}.get(portion, 1.0)
                 meal_entry = {
                     'date': datetime.now().strftime("%Y-%m-%d"),
                     'time': meal_time.strftime("%H:%M"),
                     'type': meal_type,
                     'name': meal_name,
-                    'calories': calories,
-                    'protein': protein,
-                    'carbs': carbs,
-                    'fats': fats,
-                    'notes': notes
+                    'calories': int(calories * multiplier),
+                    'protein': round(protein * multiplier, 1),
+                    'carbs': round(carbs * multiplier, 1),
+                    'fats': round(fats * multiplier, 1),
+                    'notes': notes,
+                    'satisfaction': satisfaction,
+                    'tags': tags,
+                    'portion': portion,
                 }
                 st.session_state.meal_log.append(meal_entry)
-                st.session_state.health_metrics['daily_calories'] += calories
-                st.success(f"✅ {meal_type} logged: {meal_name} ({calories} kcal)")
+                st.session_state.health_metrics['daily_calories'] += meal_entry['calories']
+                st.success(f"✅ {meal_type} logged: {meal_name} ({meal_entry['calories']} kcal, {portion})")
+                persist_user_state()
         
         st.markdown('</div>', unsafe_allow_html=True)
         
@@ -3210,7 +3291,16 @@ elif page == "Meal Logger":
                 # Meal list
                 st.write("**Today's Meals:**")
                 for meal in today_meals:
-                    st.write(f"🍽️ **{meal['type']}** ({meal['time']}): {meal['name']} - {meal['calories']} kcal")
+                    tags_str = f" • Tags: {', '.join(meal['tags'])}" if meal.get('tags') else ""
+                    st.write(
+                        f"🍽️ **{meal['type']}** ({meal['time']}, {meal.get('portion','1x')}): "
+                        f"{meal['name']} - {meal['calories']} kcal"
+                        f"{tags_str}"
+                    )
+                    st.caption(
+                        f"Protein {meal['protein']}g • Carbs {meal['carbs']}g • Fats {meal['fats']}g • "
+                        f"Satisfaction: {meal.get('satisfaction','-')}"
+                    )
             else:
                 st.info("No meals logged today. Start tracking your nutrition!")
             
@@ -3270,6 +3360,7 @@ elif page == "Progress & Goals":
                 st.session_state.weight_history.append(weight_entry)
                 st.session_state.user_data['weight'] = new_weight
                 st.success(f"✅ Weight logged: {new_weight} kg")
+                persist_user_state()
         
         with col2:
             if st.session_state.weight_history:
@@ -3348,10 +3439,22 @@ elif page == "Health Journal":
         st.subheader("✍️ Write a Journal Entry")
         
         with st.form("journal_form"):
+            prompt_choices = {
+                "Free write": "",
+                "Gratitude": "List 3 things you’re grateful for today and why.",
+                "Energy check": "What boosted or drained your energy today? One change for tomorrow.",
+                "Stress release": "Name a stressor, how it made you feel, and one small next step.",
+                "Win + lesson": "Note one win and one lesson from today. How will you use them?",
+            }
+
             entry_date = st.date_input("Date", value=datetime.now())
             entry_title = st.text_input("Title", placeholder="Today's Reflection...")
-            entry_content = st.text_area("Journal Entry", height=200, 
-                                        placeholder="How are you feeling? What did you accomplish today? Any health insights?")
+            prompt_pick = st.selectbox("Quick prompt", list(prompt_choices.keys()))
+            entry_content = st.text_area(
+                "Journal Entry",
+                height=200,
+                placeholder=prompt_choices[prompt_pick] or "How are you feeling? What did you accomplish today? Any health insights?"
+            )
             
             col1, col2 = st.columns(2)
             with col1:
@@ -3378,6 +3481,7 @@ elif page == "Health Journal":
                 st.session_state.health_journal.append(journal_entry)
                 st.success("✅ Journal entry saved!")
                 st.balloons()
+                persist_user_state()
         
         st.markdown('</div>', unsafe_allow_html=True)
         
@@ -3385,12 +3489,35 @@ elif page == "Health Journal":
         if st.session_state.health_journal:
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.subheader("📖 Your Journal Entries")
+
+            # Simple filters
+            colf1, colf2 = st.columns(2)
+            with colf1:
+                tag_filter = st.multiselect("Filter by tag", ["Exercise", "Nutrition", "Sleep", "Stress", "Success", "Challenge", "Gratitude"])
+            with colf2:
+                mood_filter = st.selectbox("Filter by mood", ["Any", "😢 Sad", "😕 Down", "😐 Neutral", "🙂 Good", "😄 Excellent"])
             
             # Sort by date (newest first)
-            sorted_entries = sorted(st.session_state.health_journal, 
-                                  key=lambda x: x['timestamp'], reverse=True)
+            sorted_entries = sorted(
+                st.session_state.health_journal, 
+                key=lambda x: x['timestamp'], 
+                reverse=True
+            )
+
+            def passes_filters(entry):
+                if tag_filter:
+                    if not entry.get('tags'):
+                        return False
+                    if not set(tag_filter).intersection(set(entry['tags'])):
+                        return False
+                if mood_filter and mood_filter != "Any":
+                    if entry.get('mood') != mood_filter:
+                        return False
+                return True
+
+            filtered_entries = [e for e in sorted_entries if passes_filters(e)]
             
-            for entry in sorted_entries:
+            for entry in filtered_entries:
                 with st.expander(f"{entry['date']} - {entry['title'] or 'Untitled'}", expanded=False):
                     col1, col2 = st.columns([2, 1])
                     
@@ -3404,6 +3531,9 @@ elif page == "Health Journal":
                             st.write(f"**Tags:** {', '.join(entry['tags'])}")
                     
                     st.caption(f"Written on {entry['timestamp']}")
+            
+            if not filtered_entries:
+                st.info("No entries match the current filters.")
             
             st.markdown('</div>', unsafe_allow_html=True)
         else:
@@ -4640,11 +4770,196 @@ div.stButton > button:hover {
         st.markdown('</div>', unsafe_allow_html=True)
 
 
-# Mood Detection Page
+# Mood Recommendation model
 # Mood Detection Page (improved: uses form, reloads model if missing, shows fresh recommendations)
 elif page == "Mood Detection":
     st.title("Mood Detection 😊")
-    # Added separator for professional look
+    # Recommendation model globals
+    RModel_LOADED = False
+    def load_recommendation_model():
+        global embed_model, index, all_chunks, summarizer, RModel_LOADED
+        if RModel_LOADED:
+            return
+        from sentence_transformers import SentenceTransformer
+        import faiss
+        import numpy as np
+        import pickle
+        from transformers import pipeline
+
+        # Load embeddings and chunks
+        embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+        embeddings = np.load("embeddings.npy")
+        with open("chunks.pkl", "rb") as f:
+            all_chunks = pickle.load(f)
+
+        # Load FAISS index
+        embedding_dim = embeddings.shape[1]
+        index = faiss.IndexFlatL2(embedding_dim)
+        index.add(embeddings)
+
+        # Load summarizer
+        summarizer = pipeline("summarization", model="facebook/bart-base")
+
+        RModel_LOADED = True
+
+    def get_recommendations_for_mood(mood, top_k=5, summary_length=150):
+        load_recommendation_model()
+        query = f"Suggest exercises, activities, and health tips for someone who is {mood}"
+        query_embedding = embed_model.encode([query])
+        D, I = index.search(query_embedding, top_k)
+        results = [all_chunks[i] for i in I[0]]
+        merged_text = " ".join(results)
+        summary_text = summarizer(
+            merged_text,
+            max_length=summary_length,
+            min_length=40,
+            do_sample=True
+        )[0]['summary_text']
+        return summary_text, results
+
+    def render_recommendation_panel(mood_label, rec_summary, rec_chunks):
+        """Display concise, polished recommendations without raw chunk dump."""
+        import re
+
+        def parse_recommendation_sections(text):
+            """Extract structured sections if present in the generated text."""
+            lower = text.lower()
+            markers = []
+
+            def add(label, keys):
+                for k in keys:
+                    idx = lower.find(k)
+                    if idx != -1:
+                        markers.append((label, idx))
+                        break
+
+            add("recommended", ["recommended exercises", "recommended activities", "recommended actions"])
+            add("why", ["why these exercise", "why these exercises", "why these activities", "why these help"])
+            add("motivation", ["motivational message", "motivation", "motivational"])
+            add("long_form", ["long-form guidance", "long form guidance", "long guidance", "guidance"])
+
+            if not markers:
+                return {}
+
+            markers = sorted(markers, key=lambda x: x[1])
+            sections = {}
+            for i, (label, start_idx) in enumerate(markers):
+                end_idx = markers[i + 1][1] if i + 1 < len(markers) else len(text)
+                sections[label] = text[start_idx:end_idx]
+            return sections
+
+        def build_fallback_sections(mood_label, rec_summary, rec_chunks):
+            """Guarantee the four cards even if the model skips headings."""
+            # Use first chunk as action ideas
+            first_chunk = rec_chunks[0] if rec_chunks else rec_summary
+            snippet = " ".join(first_chunk.split()) if first_chunk else ""
+            recommended = snippet[:320] + ("…" if len(snippet) > 320 else "")
+
+            # Reuse summary as long-form guidance
+            long_form = rec_summary
+
+            why_text = (
+                f"These steps help balance the {mood_label.lower()} state by grounding your body "
+                "and reducing reactivity, keeping you consistent without burnout."
+            )
+            motivation = (
+                f"Keep going — your {mood_label.lower()} is feedback, not a verdict. "
+                "Small, steady actions compound."
+            )
+            return {
+                "recommended": recommended,
+                "why": why_text,
+                "motivation": motivation,
+                "long_form": long_form,
+            }
+
+        def clean_points(segment):
+            """Split a segment into bullet-friendly points."""
+            if not segment:
+                return []
+            seg = segment.replace("▬", "\n").replace("■", "\n").replace("▪", "\n")
+            parts = re.split(r"\n+|•|-\s+", seg)
+            return [p.strip(" -•\t:.") for p in parts if p.strip(" -•\t:.")]
+
+        def render_card(title, emoji, body):
+            points = clean_points(body)
+            if len(points) > 1:
+                content = "".join([f"<li style='color:#d1d5db;'>{p}</li>" for p in points])
+                inner = f"<ul style='padding-left:18px;margin:0;color:#d1d5db;'>{content}</ul>"
+            else:
+                inner = f"<div style='color:#d1d5db;'>{points[0] if points else body}</div>"
+
+            st.markdown(
+                f"""
+                <div style="
+                    background:rgba(255,255,255,0.04);
+                    border:1px solid rgba(255,255,255,0.08);
+                    border-radius:12px;
+                    padding:14px;
+                    color:#e5e7eb;
+                    height:100%;
+                ">
+                    <div style="font-weight:600;color:#e5e7eb;margin-bottom:6px;">{emoji} {title}</div>
+                    <div style="color:#e5e7eb;line-height:1.5;">
+                        {inner}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        sections = parse_recommendation_sections(rec_summary)
+        if not sections:
+            sections = build_fallback_sections(mood_label, rec_summary, rec_chunks)
+
+        st.markdown(
+            """
+            <div style="
+                padding:18px;
+                border-radius:14px;
+                background:linear-gradient(135deg,#0f172a 0%,#111827 50%,#1f2937 100%);
+                color:#e5e7eb;
+                border:1px solid rgba(255,255,255,0.06);
+                box-shadow:0 12px 30px rgba(0,0,0,0.35);
+            ">
+            """,
+            unsafe_allow_html=True,
+        )
+        st.subheader("📌 Personalized Recommendations (RModel)")
+        st.markdown(f"**Tailored for your mood:** `{mood_label.title()}`")
+        if sections:
+            cards = []
+            if "recommended" in sections:
+                cards.append(("Recommended Exercises", "🎯", sections["recommended"]))
+            if "why" in sections:
+                cards.append(("Why These Help", "💡", sections["why"]))
+            if "motivation" in sections:
+                cards.append(("Motivational Message", "✨", sections["motivation"]))
+            if "long_form" in sections:
+                cards.append(("Long-form Guidance", "📘", sections["long_form"]))
+
+            cols = st.columns(2)
+            for i, (title, emoji, body) in enumerate(cards):
+                with cols[i % 2]:
+                    render_card(title, emoji, body)
+        else:
+            st.markdown(
+                f"""
+                <div style="
+                    background:rgba(255,255,255,0.03);
+                    border:1px solid rgba(255,255,255,0.07);
+                    border-radius:10px;
+                    padding:14px;
+                    line-height:1.5;
+                ">
+                {rec_summary}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        st.caption("Concise guidance generated from your mood analysis.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        # Added separator for professional look
     st.markdown("---")
 
     if not is_logged_in():
@@ -4705,6 +5020,15 @@ elif page == "Mood Detection":
                         mood_label = dominant["label"]
                         polarity = dominant["score"]
                         emoji = EMOJI_DICT.get(mood_label.lower(), "🙂")
+                        
+                        # ------------------------
+                        # Call Recommendation Model
+                        # ------------------------
+                        try:
+                            rec_summary, rec_chunks = get_recommendations_for_mood(mood_label.lower())
+                            render_recommendation_panel(mood_label, rec_summary, rec_chunks)
+                        except Exception as e:
+                            st.error(f"Failed to get recommendations: {e}")
 
                         # تخزين في الحالة
                         mood_entry = {
@@ -4716,6 +5040,7 @@ elif page == "Mood Detection":
                         }
                         st.session_state.mood_history.append(mood_entry)
                         st.session_state.health_metrics['mood_score'] = polarity
+                        persist_user_state()
 
                         # عرض الميتريكس
                         st.markdown("---")
@@ -5474,8 +5799,7 @@ elif page == "AI Fitness Trainer":
                 cap.set(cv2.CAP_PROP_FPS, 30)
 
                 if not cap.isOpened():
-                    st.error("❌ Could not open camera. Note: Live camera access is not supported on Streamlit Cloud. "
-    "To use a real-time camera, run this app locally on your computer.")
+                    st.error("❌ Could not open camera. Make sure it is connected and not used by another app.")
                 else:
                     # Process a short burst of frames, then rerun for continuous effect
                     max_frames = 60
