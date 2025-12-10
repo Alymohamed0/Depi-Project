@@ -77,9 +77,10 @@ def get_database_connection():
     try:
         # Use shorter timeout to prevent blocking
         conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="Mhaoamhaoa7@",
+            host="mysql-1eae3245-alymohamedahmed1234-dc68.g.aivencloud.com",
+            user="avnadmin",
+            password="AVNS_4kyAq-NIrwVT_AMv3H5",
+            port="19956",
             autocommit=True,
             connect_timeout=2,  # Reduced from 5 to 2 seconds
             raise_on_warnings=False
