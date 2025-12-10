@@ -1689,8 +1689,14 @@ def generate_chatbot_response(user_input, user_data):
     """
 
     # --- API Key Configuration ---
-    api_key = os.getenv("GEMINI_API_KEY") or "AIzaSyC98pj9w2ioi0PgTG5LvlnXho78t_oE6Zc"
+    # --- API Key Configuration ---
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except KeyError:
+        return "❌ API Key missing. Please add GEMINI_API_KEY in Streamlit Secrets."
+
     genai.configure(api_key=api_key)
+
 
     # --- Build Profile Summary ---
     age = user_data.get('age')
