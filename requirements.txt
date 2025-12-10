@@ -19,6 +19,8 @@ transformers>=4.30.0
 torch>=2.0.0
 torchvision>=0.15.0
 textblob>=0.17.0
+sentence-transformers>=2.2.2
+faiss-cpu>=1.7.4
 
 # Computer Vision & Pose Detection
 opencv-python>=4.8.0
